@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-Generador de sitio estático para Netlify.
-Lee tournament_data.json y genera dist/index.html con todo embebido.
+Generador de sitio estático multi-torneo para Netlify.
+
+Lee tournaments_db.json (o tournament_data.json legacy) y genera
+dist/index.html con todos los torneos embebidos y un selector.
 
 Uso:
-    python generate_site.py                              # usa tournament_data.json
-    python generate_site.py --input mi_torneo.json       # otro JSON
+    python generate_site.py                              # usa tournaments_db.json
+    python generate_site.py --input tournament_data.json # legacy single-tournament
     python generate_site.py --output public              # otro directorio
 """
 
@@ -15,6 +17,9 @@ import math
 import os
 import sys
 from collections import Counter, defaultdict
+
+
+DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tournaments_db.json")
 
 
 def load_data(filepath: str) -> dict:
@@ -120,27 +125,44 @@ PIE_COLORS = [
 ]
 
 
-def generate_html(meta: dict) -> str:
-    """Generate the full HTML dashboard."""
+def generate_html(all_metas: dict) -> str:
+    """Generate the full HTML dashboard with multi-tournament support.
+    
+    Args:
+        all_metas: dict of {tournament_id: meta_dict} for each tournament
+    """
 
-    tournament = meta["tournament"]
-    archetypes_json = json.dumps(meta["archetypes"], ensure_ascii=False)
-    matrix_decks_json = json.dumps(meta["matrix_decks"], ensure_ascii=False)
-    matrix_json = json.dumps(meta["matrix"], ensure_ascii=False)
+    # Build the TOURNAMENTS JS object with all data
+    tournaments_js = {}
+    first_id = None
+    for tid, meta in all_metas.items():
+        if first_id is None:
+            first_id = tid
+        tournaments_js[tid] = {
+            "tournament": meta["tournament"],
+            "archetypes": meta["archetypes"],
+            "matrix_decks": meta["matrix_decks"],
+            "matrix": meta["matrix"],
+            "total_pilots": meta["total_pilots"],
+        }
+
+    all_tournaments_json = json.dumps(tournaments_js, ensure_ascii=False)
     pie_colors_json = json.dumps(PIE_COLORS)
 
-    t_name = tournament["name"]
-    t_players = meta["total_pilots"]
-    t_matches = tournament["total_matches"]
-    t_rounds = tournament["total_rounds"]
-    t_decks = len([a for a in meta["archetypes"] if a["total"] > 0])
+    # Build tournament selector options
+    selector_options = ""
+    for tid, meta in all_metas.items():
+        t = meta["tournament"]
+        name = t["name"]
+        short_name = name if len(name) <= 60 else name[:57] + "…"
+        selector_options += f'    <option value="{tid}">{short_name}</option>\n'
 
     return f"""<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Meta Analyzer — {t_name}</title>
+<title>MTG Meta Analyzer</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎴</text></svg>">
 <style>
 /* ═══════════════ RESET & BASE ═══════════════ */
@@ -203,6 +225,14 @@ a:hover{{color:var(--accent-hover)}}
 .filter-input{{background:var(--bg-2);border:1px solid var(--border);color:var(--text-1);padding:6px 10px;border-radius:6px;font-size:.82rem;outline:none;transition:var(--transition)}}
 .filter-input:focus{{border-color:var(--accent);box-shadow:0 0 0 3px rgba(99,102,241,.15)}}
 .filter-input::placeholder{{color:var(--text-3)}}
+
+/* Tournament selector bar */
+.tournament-bar{{background:var(--bg-2);border-bottom:1px solid var(--border);padding:.75rem 1.5rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap}}
+.tournament-bar label{{color:var(--text-2);font-size:.82rem;font-weight:600;white-space:nowrap}}
+.tournament-select{{background:var(--bg-1);border:1px solid var(--border);color:var(--text-0);padding:8px 14px;border-radius:8px;font-size:.85rem;outline:none;transition:var(--transition);min-width:300px;max-width:600px;flex:1;cursor:pointer}}
+.tournament-select:focus{{border-color:var(--accent);box-shadow:0 0 0 3px rgba(99,102,241,.15)}}
+.tournament-select option{{background:var(--bg-1);color:var(--text-1)}}
+.tournament-count{{color:var(--text-3);font-size:.75rem;margin-left:auto}}
 
 /* ═══════════════ METAGAME PAGE ═══════════════ */
 .meta-grid{{display:grid;grid-template-columns:320px 1fr;gap:1.5rem;margin-top:1.5rem}}
@@ -308,7 +338,6 @@ a:hover{{color:var(--accent-hover)}}
 <!-- ═══ TOP BAR ═══ -->
 <header class="topbar">
   <div class="logo">🎴 <span>MTG Meta Analyzer</span></div>
-  <div class="tournament-name">{t_name}</div>
   <nav class="nav">
     <button class="nav-btn active" data-panel="meta-panel">
       <svg viewBox="0 0 24 24"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0h4"/></svg>
@@ -325,12 +354,20 @@ a:hover{{color:var(--accent-hover)}}
   </nav>
 </header>
 
+<!-- ═══ TOURNAMENT SELECTOR ═══ -->
+<div class="tournament-bar">
+  <label>🏆 Torneo</label>
+  <select class="tournament-select" id="tournament-select">
+{selector_options}  </select>
+  <span class="tournament-count" id="tournament-count"></span>
+</div>
+
 <!-- ═══ STATS RIBBON ═══ -->
 <div class="stats-ribbon">
-  <div class="ribbon-stat"><div class="val">{t_players}</div><div class="lbl">Players</div></div>
-  <div class="ribbon-stat"><div class="val">{t_matches}</div><div class="lbl">Matches</div></div>
-  <div class="ribbon-stat"><div class="val">{t_decks}</div><div class="lbl">Archetypes</div></div>
-  <div class="ribbon-stat"><div class="val">{t_rounds}</div><div class="lbl">Rounds</div></div>
+  <div class="ribbon-stat"><div class="val" id="r-players">-</div><div class="lbl">Players</div></div>
+  <div class="ribbon-stat"><div class="val" id="r-matches">-</div><div class="lbl">Matches</div></div>
+  <div class="ribbon-stat"><div class="val" id="r-decks">-</div><div class="lbl">Archetypes</div></div>
+  <div class="ribbon-stat"><div class="val" id="r-rounds">-</div><div class="lbl">Rounds</div></div>
 </div>
 
 <!-- ═══ CONTENT ═══ -->
@@ -355,7 +392,7 @@ a:hover{{color:var(--accent-hover)}}
             <div class="pie-container">
               <svg id="pie-svg" viewBox="0 0 200 200"></svg>
               <div class="pie-center">
-                <div class="big" id="pie-total">{t_decks}</div>
+                <div class="big" id="pie-total">-</div>
                 <div class="sub">archetypes</div>
               </div>
             </div>
@@ -435,12 +472,49 @@ a:hover{{color:var(--accent-hover)}}
 
 <script>
 /* ══════════════════════════════════════════════════
-   DATA (embedded at build time)
+   DATA (embedded at build time — ALL tournaments)
    ══════════════════════════════════════════════════ */
-const ARCHETYPES = {archetypes_json};
-const MX_DECKS   = {matrix_decks_json};
-const MX_DATA    = {matrix_json};
+const ALL_TOURNAMENTS = {all_tournaments_json};
 const PIE_COLORS = {pie_colors_json};
+
+/* Current tournament state */
+let currentTournamentId = '{first_id}';
+let ARCHETYPES = [];
+let MX_DECKS   = [];
+let MX_DATA    = [];
+
+function loadTournament(tid) {{
+  const t = ALL_TOURNAMENTS[tid];
+  if (!t) return;
+  currentTournamentId = tid;
+  ARCHETYPES = t.archetypes;
+  MX_DECKS   = t.matrix_decks;
+  MX_DATA    = t.matrix;
+
+  // Update stats ribbon
+  const info = t.tournament;
+  const activeDecks = t.archetypes.filter(a => a.total > 0).length;
+  document.getElementById('r-players').textContent = t.total_pilots;
+  document.getElementById('r-matches').textContent = info.total_matches;
+  document.getElementById('r-decks').textContent = activeDecks;
+  document.getElementById('r-rounds').textContent = info.total_rounds;
+  document.title = 'MTG Meta Analyzer — ' + info.name;
+
+  // Re-render active panel
+  populateSelect();
+  renderMetaTable();
+  const matrixPanel = document.getElementById('matrix-panel');
+  if (matrixPanel.classList.contains('active')) renderMatrix();
+  const detailPanel = document.getElementById('detail-panel');
+  if (detailPanel.classList.contains('active')) renderDetail();
+}}
+
+/* Tournament selector */
+const tournamentCount = Object.keys(ALL_TOURNAMENTS).length;
+document.getElementById('tournament-count').textContent = tournamentCount + ' torneo' + (tournamentCount !== 1 ? 's' : '') + ' disponible' + (tournamentCount !== 1 ? 's' : '');
+document.getElementById('tournament-select').addEventListener('change', function() {{
+  loadTournament(this.value);
+}});
 
 /* ══════════════════════════════════════════════════
    NAVIGATION
@@ -568,9 +642,9 @@ function renderMetaTable() {{
   }});
 
   renderPie(filtered);
+  document.getElementById('pie-total').textContent = filtered.length;
 
   // Update header sort indicators
-  document.querySelectorAll('#meta-tbl thead th').forEach(th => {{
     th.classList.remove('sorted-asc', 'sorted-desc');
     if (th.dataset.key === metaSortKey) {{
       th.classList.add(metaSortDir > 0 ? 'sorted-asc' : 'sorted-desc');
@@ -591,7 +665,9 @@ document.querySelectorAll('#meta-tbl thead th[data-key]').forEach(th => {{
 
 document.getElementById('f-min').addEventListener('input', renderMetaTable);
 document.getElementById('f-search').addEventListener('input', renderMetaTable);
-renderMetaTable();
+
+/* Initial load */
+loadTournament(currentTournamentId);
 
 /* ══════════════════════════════════════════════════
    MATCHUP MATRIX
@@ -800,10 +876,8 @@ function renderDetail() {{
   container.innerHTML = html;
 }}
 
-populateSelect();
 document.getElementById('dd-select').addEventListener('change', renderDetail);
 document.getElementById('dd-min').addEventListener('input', renderDetail);
-renderDetail();
 
 /* ══════════════════════════════════════════════════
    KEYBOARD SHORTCUTS
@@ -818,42 +892,85 @@ document.addEventListener('keydown', e => {{
 </html>"""
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Generate static Netlify site from tournament data")
-    parser.add_argument("--input", "-i", default="tournament_data.json", help="Input JSON file")
-    parser.add_argument("--output", "-o", default="dist", help="Output directory")
-    args = parser.parse_args()
+def generate_multi_tournament_site(tournaments: dict, output_dir: str = "dist"):
+    """
+    Generate the static site with multiple tournaments.
+    
+    Args:
+        tournaments: dict of {tournament_id: tournament_data_dict}
+        output_dir: output directory for the site
+    """
+    all_metas = {}
+    for tid, tdata in tournaments.items():
+        print(f"[*] Procesando: {tdata['tournament']['name']}")
+        meta = build_metagame(tdata)
+        all_metas[tid] = meta
+        active = len([a for a in meta['archetypes'] if a['total'] > 0])
+        print(f"    Arquetipos con partidas: {active}")
 
-    if not os.path.exists(args.input):
-        print(f"[!] No se encuentra {args.input}")
-        print("    Primero ejecuta: python melee_scraper.py")
-        sys.exit(1)
+    os.makedirs(output_dir, exist_ok=True)
 
-    print(f"[*] Cargando datos de: {args.input}")
-    data = load_data(args.input)
-
-    print("[*] Procesando metagame...")
-    meta = build_metagame(data)
-
-    print(f"[*] Arquetipos con partidas: {len([a for a in meta['archetypes'] if a['total'] > 0])}")
-
-    os.makedirs(args.output, exist_ok=True)
-
-    html = generate_html(meta)
-    out_path = os.path.join(args.output, "index.html")
+    html = generate_html(all_metas)
+    out_path = os.path.join(output_dir, "index.html")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
 
-    # Also write a _redirects file for Netlify SPA
-    redirects_path = os.path.join(args.output, "_redirects")
+    redirects_path = os.path.join(output_dir, "_redirects")
     with open(redirects_path, "w") as f:
         f.write("/*    /index.html   200\n")
 
-    print(f"[✓] Sitio generado en: {args.output}/")
+    print(f"\n[✓] Sitio generado en: {output_dir}/")
     print(f"    index.html  ({len(html):,} bytes)")
-    print(f"    _redirects")
-    print(f"\n    Para Netlify: deploy la carpeta '{args.output}/'")
-    print(f"    Para preview local: python -m http.server -d {args.output}")
+    print(f"    Torneos embebidos: {len(all_metas)}")
+    for tid, meta in all_metas.items():
+        t = meta['tournament']
+        print(f"      • {t['name']} ({t['total_matches']} matches)")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Generate static Netlify site from tournament data")
+    parser.add_argument("--input", "-i", default=None,
+                        help="Input JSON file (legacy single-tournament mode)")
+    parser.add_argument("--db", default=DB_FILE,
+                        help="Tournament database file (default: tournaments_db.json)")
+    parser.add_argument("--output", "-o", default="dist", help="Output directory")
+    args = parser.parse_args()
+
+    # Mode 1: Legacy single-tournament file
+    if args.input:
+        if not os.path.exists(args.input):
+            print(f"[!] No se encuentra {args.input}")
+            sys.exit(1)
+        print(f"[*] Modo legacy — cargando: {args.input}")
+        data = load_data(args.input)
+        tid = str(data["tournament"]["id"])
+        generate_multi_tournament_site({tid: data}, args.output)
+        return
+
+    # Mode 2: Multi-tournament database
+    if os.path.exists(args.db):
+        print(f"[*] Cargando base de datos: {args.db}")
+        db_data = load_data(args.db)
+        tournaments = db_data.get("tournaments", {})
+        if tournaments:
+            generate_multi_tournament_site(tournaments, args.output)
+            return
+        print(f"[!] Base de datos vacía en {args.db}")
+
+    # Fallback: try legacy tournament_data.json
+    legacy = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tournament_data.json")
+    if os.path.exists(legacy):
+        print(f"[*] Fallback a archivo legacy: {legacy}")
+        data = load_data(legacy)
+        tid = str(data["tournament"]["id"])
+        generate_multi_tournament_site({tid: data}, args.output)
+        return
+
+    print("[!] No se encontró ninguna fuente de datos.")
+    print("    Opciones:")
+    print("    1. python manage_tournaments.py add <url>")
+    print("    2. python generate_site.py --input tournament_data.json")
+    sys.exit(1)
 
 
 if __name__ == "__main__":
