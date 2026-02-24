@@ -149,14 +149,6 @@ def generate_html(all_metas: dict) -> str:
     all_tournaments_json = json.dumps(tournaments_js, ensure_ascii=False)
     pie_colors_json = json.dumps(PIE_COLORS)
 
-    # Build tournament selector options
-    selector_options = ""
-    for tid, meta in all_metas.items():
-        t = meta["tournament"]
-        name = t["name"]
-        short_name = name if len(name) <= 60 else name[:57] + "…"
-        selector_options += f'    <option value="{tid}">{short_name}</option>\n'
-
     return f"""<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -226,13 +218,72 @@ a:hover{{color:var(--accent-hover)}}
 .filter-input:focus{{border-color:var(--accent);box-shadow:0 0 0 3px rgba(99,102,241,.15)}}
 .filter-input::placeholder{{color:var(--text-3)}}
 
-/* Tournament selector bar */
-.tournament-bar{{background:var(--bg-2);border-bottom:1px solid var(--border);padding:.75rem 1.5rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap}}
-.tournament-bar label{{color:var(--text-2);font-size:.82rem;font-weight:600;white-space:nowrap}}
-.tournament-select{{background:var(--bg-1);border:1px solid var(--border);color:var(--text-0);padding:8px 14px;border-radius:8px;font-size:.85rem;outline:none;transition:var(--transition);min-width:300px;max-width:600px;flex:1;cursor:pointer}}
-.tournament-select:focus{{border-color:var(--accent);box-shadow:0 0 0 3px rgba(99,102,241,.15)}}
-.tournament-select option{{background:var(--bg-1);color:var(--text-1)}}
-.tournament-count{{color:var(--text-3);font-size:.75rem;margin-left:auto}}
+/* ═══════════════ HOME PANEL ═══════════════ */
+.home-hero{{text-align:center;padding:3rem 1.5rem 2rem}}
+.home-hero h1{{font-size:2rem;font-weight:800;color:var(--text-0);margin-bottom:.5rem}}
+.home-hero h1 span{{background:linear-gradient(135deg,var(--accent),#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}}
+.home-hero p{{color:var(--text-2);font-size:.95rem;max-width:500px;margin:0 auto}}
+
+/* Add tournament box */
+.add-box{{max-width:640px;margin:2rem auto;background:var(--bg-1);border:2px dashed var(--border);border-radius:12px;padding:2rem;transition:var(--transition)}}
+.add-box:focus-within{{border-color:var(--accent);box-shadow:0 0 0 4px rgba(99,102,241,.1)}}
+.add-box-label{{display:flex;align-items:center;gap:.5rem;font-size:.9rem;font-weight:600;color:var(--text-0);margin-bottom:1rem}}
+.add-box-label svg{{width:20px;height:20px;fill:var(--accent)}}
+.add-row{{display:flex;gap:.75rem}}
+.add-input{{flex:1;background:var(--bg-2);border:1px solid var(--border);color:var(--text-0);padding:12px 16px;border-radius:8px;font-size:.9rem;outline:none;transition:var(--transition)}}
+.add-input:focus{{border-color:var(--accent);box-shadow:0 0 0 3px rgba(99,102,241,.15)}}
+.add-input::placeholder{{color:var(--text-3)}}
+.add-btn{{background:var(--accent);color:#fff;border:none;padding:12px 24px;border-radius:8px;font-size:.9rem;font-weight:700;cursor:pointer;transition:var(--transition);white-space:nowrap;display:flex;align-items:center;gap:6px}}
+.add-btn:hover{{background:var(--accent-hover);transform:translateY(-1px);box-shadow:0 4px 16px rgba(99,102,241,.3)}}
+.add-btn:disabled{{opacity:.5;cursor:not-allowed;transform:none;box-shadow:none}}
+.add-btn svg{{width:16px;height:16px;fill:currentColor}}
+.add-status{{padding:.75rem 1rem;border-radius:8px;font-size:.85rem;margin-top:1rem;display:none}}
+.add-status.info{{display:block;background:rgba(99,102,241,.1);color:var(--accent);border:1px solid rgba(99,102,241,.2)}}
+.add-status.success{{display:block;background:rgba(52,211,153,.1);color:var(--green);border:1px solid rgba(52,211,153,.2)}}
+.add-status.error{{display:block;background:rgba(248,113,113,.1);color:var(--red);border:1px solid rgba(248,113,113,.2)}}
+.add-spinner{{display:inline-block;width:16px;height:16px;border:2.5px solid var(--accent);border-top-color:transparent;border-radius:50%;animation:spin .6s linear infinite;vertical-align:-3px;margin-right:6px}}
+@keyframes spin{{to{{transform:rotate(360deg)}}}}
+
+/* Progress bar */
+.progress-wrap{{max-width:640px;margin:1.5rem auto 0;display:none}}
+.progress-wrap.active{{display:block}}
+.progress-label{{display:flex;justify-content:space-between;font-size:.8rem;color:var(--text-2);margin-bottom:6px}}
+.progress-track{{height:10px;background:var(--bg-2);border-radius:99px;overflow:hidden;position:relative}}
+.progress-fill{{height:100%;border-radius:99px;background:linear-gradient(90deg,var(--accent),#818cf8);width:0%;transition:width .4s ease;position:relative}}
+.progress-fill.indeterminate{{width:30%!important;animation:indeterminate 1.5s ease-in-out infinite}}
+@keyframes indeterminate{{0%{{transform:translateX(-100%);width:30%}}50%{{width:45%}}100%{{transform:translateX(400%);width:30%}}}}
+.progress-steps{{display:flex;gap:.5rem;margin-top:.75rem;flex-wrap:wrap}}
+.progress-step{{font-size:.75rem;padding:4px 10px;border-radius:6px;background:var(--bg-2);color:var(--text-3);transition:all .3s}}
+.progress-step.active{{background:rgba(99,102,241,.15);color:var(--accent)}}
+.progress-step.done{{background:rgba(52,211,153,.15);color:var(--green)}}
+.progress-step.done::before{{content:'✓ '}}
+.progress-step.error{{background:rgba(248,113,113,.15);color:var(--red)}}
+.progress-step.error::before{{content:'✕ '}}
+
+/* Tournament cards grid */
+.t-grid-title{{max-width:640px;margin:2.5rem auto .75rem;font-size:.85rem;font-weight:600;color:var(--text-2);text-transform:uppercase;letter-spacing:.06em;padding:0 .25rem}}
+.t-grid{{max-width:640px;margin:0 auto;display:flex;flex-direction:column;gap:.5rem;padding-bottom:3rem}}
+.t-card{{background:var(--bg-1);border:1px solid var(--border);border-radius:10px;padding:1rem 1.25rem;display:flex;align-items:center;gap:1rem;cursor:pointer;transition:var(--transition)}}
+.t-card:hover{{border-color:var(--accent);background:var(--bg-2);transform:translateY(-1px);box-shadow:0 4px 20px rgba(0,0,0,.3)}}
+.t-card-icon{{font-size:1.5rem;flex-shrink:0}}
+.t-card-info{{flex:1;min-width:0}}
+.t-card-name{{font-weight:700;color:var(--text-0);font-size:.92rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+.t-card-stats{{display:flex;gap:1rem;margin-top:4px;font-size:.75rem;color:var(--text-3)}}
+.t-card-stats span{{display:flex;align-items:center;gap:3px}}
+.t-card-actions{{display:flex;gap:.5rem;flex-shrink:0}}
+.t-card-go{{background:var(--accent);color:#fff;border:none;padding:6px 16px;border-radius:6px;font-size:.8rem;font-weight:600;cursor:pointer;transition:var(--transition)}}
+.t-card-go:hover{{background:var(--accent-hover)}}
+.t-card-del{{background:none;border:1px solid var(--border);color:var(--text-3);width:30px;height:30px;border-radius:6px;cursor:pointer;font-size:1rem;transition:var(--transition);display:flex;align-items:center;justify-content:center}}
+.t-card-del:hover{{border-color:var(--red);color:var(--red);background:rgba(248,113,113,.08)}}
+.t-empty{{text-align:center;padding:2rem;color:var(--text-3);font-size:.9rem}}
+
+/* Active tournament bar (shown in analysis views) */
+.active-bar{{background:var(--bg-2);border-bottom:1px solid var(--border);padding:.5rem 1.5rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap;display:none}}
+.active-bar.show{{display:flex}}
+.active-bar-name{{color:var(--text-0);font-weight:600;font-size:.85rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}}
+.active-bar-back{{background:none;border:1px solid var(--border);color:var(--text-2);padding:5px 12px;border-radius:6px;font-size:.78rem;cursor:pointer;transition:var(--transition);display:flex;align-items:center;gap:4px}}
+.active-bar-back:hover{{border-color:var(--accent);color:var(--accent)}}
+.active-bar-back svg{{width:12px;height:12px;fill:currentColor}}
 
 /* ═══════════════ METAGAME PAGE ═══════════════ */
 .meta-grid{{display:grid;grid-template-columns:320px 1fr;gap:1.5rem;margin-top:1.5rem}}
@@ -339,27 +390,32 @@ a:hover{{color:var(--accent-hover)}}
 <header class="topbar">
   <div class="logo">🎴 <span>MTG Meta Analyzer</span></div>
   <nav class="nav">
-    <button class="nav-btn active" data-panel="meta-panel">
+    <button class="nav-btn active" data-panel="home-panel" id="nav-home">
+      <svg viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:2"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0h4"/></svg>
+      Torneos
+    </button>
+    <button class="nav-btn" data-panel="meta-panel" id="nav-meta">
       <svg viewBox="0 0 24 24"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0h4"/></svg>
       Metagame
     </button>
-    <button class="nav-btn" data-panel="matrix-panel">
+    <button class="nav-btn" data-panel="matrix-panel" id="nav-matrix">
       <svg viewBox="0 0 24 24"><path d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg>
       Matchups
     </button>
-    <button class="nav-btn" data-panel="detail-panel">
+    <button class="nav-btn" data-panel="detail-panel" id="nav-detail">
       <svg viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
       Deck Detail
     </button>
   </nav>
 </header>
 
-<!-- ═══ TOURNAMENT SELECTOR ═══ -->
-<div class="tournament-bar">
-  <label>🏆 Torneo</label>
-  <select class="tournament-select" id="tournament-select">
-{selector_options}  </select>
-  <span class="tournament-count" id="tournament-count"></span>
+<!-- ═══ ACTIVE TOURNAMENT BAR (shown in analysis views) ═══ -->
+<div class="active-bar" id="active-bar">
+  <button class="active-bar-back" id="btn-back-home">
+    <svg viewBox="0 0 24 24"><path d="M15 19l-7-7 7-7"/></svg>
+    Torneos
+  </button>
+  <div class="active-bar-name" id="active-bar-name">—</div>
 </div>
 
 <!-- ═══ STATS RIBBON ═══ -->
@@ -373,8 +429,55 @@ a:hover{{color:var(--accent-hover)}}
 <!-- ═══ CONTENT ═══ -->
 <div class="main">
 
+  <!-- ──── HOME PANEL ──── -->
+  <div id="home-panel" class="panel active">
+    <div class="home-hero">
+      <h1>🎴 <span>MTG Meta Analyzer</span></h1>
+      <p>Selecciona un torneo para ver su metagame, matrix de matchups y detalle de mazos. Puedes añadir cualquier torneo de melee.gg.</p>
+    </div>
+
+    <!-- Add tournament box -->
+    <div class="add-box">
+      <div class="add-box-label">
+        <svg viewBox="0 0 24 24"><path d="M12 4v16m8-8H4" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round"/></svg>
+        Añadir nuevo torneo
+      </div>
+      <div class="add-row">
+        <input class="add-input" id="add-url" type="text" placeholder="Pega la URL: https://melee.gg/Tournament/View/...">
+        <button class="add-btn" id="btn-do-add">
+          <svg viewBox="0 0 24 24"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+          Scrapear
+        </button>
+      </div>
+      <div class="add-status" id="add-status"></div>
+    </div>
+
+    <!-- Progress bar -->
+    <div class="progress-wrap" id="progress-wrap">
+      <div class="progress-label">
+        <span id="progress-text">Preparando...</span>
+        <span id="progress-pct">0%</span>
+      </div>
+      <div class="progress-track">
+        <div class="progress-fill" id="progress-fill"></div>
+      </div>
+      <div class="progress-steps" id="progress-steps">
+        <span class="progress-step" data-step="validate">Validar URL</span>
+        <span class="progress-step" data-step="connect">Conectar melee.gg</span>
+        <span class="progress-step" data-step="rounds">Descargar rondas</span>
+        <span class="progress-step" data-step="matches">Procesar partidas</span>
+        <span class="progress-step" data-step="matrix">Construir matrix</span>
+        <span class="progress-step" data-step="save">Guardar datos</span>
+      </div>
+    </div>
+
+    <!-- Tournament list -->
+    <div class="t-grid-title" id="t-grid-title">Torneos disponibles</div>
+    <div class="t-grid" id="t-grid"></div>
+  </div>
+
   <!-- ──── METAGAME PANEL ──── -->
-  <div id="meta-panel" class="panel active">
+  <div id="meta-panel" class="panel">
     <div class="card">
       <div class="card-header">
         <h2>Metagame Breakdown</h2>
@@ -478,7 +581,7 @@ const ALL_TOURNAMENTS = {all_tournaments_json};
 const PIE_COLORS = {pie_colors_json};
 
 /* Current tournament state */
-let currentTournamentId = '{first_id}';
+let currentTournamentId = null;
 let ARCHETYPES = [];
 let MX_DECKS   = [];
 let MX_DATA    = [];
@@ -498,6 +601,7 @@ function loadTournament(tid) {{
   document.getElementById('r-matches').textContent = info.total_matches;
   document.getElementById('r-decks').textContent = activeDecks;
   document.getElementById('r-rounds').textContent = info.total_rounds;
+  document.getElementById('active-bar-name').textContent = '🏆 ' + info.name;
   document.title = 'MTG Meta Analyzer — ' + info.name;
 
   // Re-render active panel
@@ -509,26 +613,46 @@ function loadTournament(tid) {{
   if (detailPanel.classList.contains('active')) renderDetail();
 }}
 
-/* Tournament selector */
-const tournamentCount = Object.keys(ALL_TOURNAMENTS).length;
-document.getElementById('tournament-count').textContent = tournamentCount + ' torneo' + (tournamentCount !== 1 ? 's' : '') + ' disponible' + (tournamentCount !== 1 ? 's' : '');
-document.getElementById('tournament-select').addEventListener('change', function() {{
-  loadTournament(this.value);
-}});
+/* Navigate to tournament analysis */
+function openTournamentAnalysis(tid) {{
+  loadTournament(tid);
+  // Switch to metagame panel
+  switchPanel('meta-panel');
+}}
 
 /* ══════════════════════════════════════════════════
    NAVIGATION
    ══════════════════════════════════════════════════ */
+function switchPanel(panelId) {{
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  const btn = document.querySelector(`.nav-btn[data-panel="${{panelId}}"]`);
+  if (btn) btn.classList.add('active');
+  document.getElementById(panelId).classList.add('active');
+
+  // Show/hide active bar and stats ribbon
+  const isHome = panelId === 'home-panel';
+  document.getElementById('active-bar').classList.toggle('show', !isHome);
+  document.querySelector('.stats-ribbon').style.display = isHome ? 'none' : 'flex';
+
+  if (panelId === 'matrix-panel') renderMatrix();
+  if (panelId === 'detail-panel') renderDetail();
+}}
+
 document.querySelectorAll('.nav-btn').forEach(btn => {{
   btn.addEventListener('click', () => {{
-    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-    btn.classList.add('active');
-    document.getElementById(btn.dataset.panel).classList.add('active');
-    if (btn.dataset.panel === 'matrix-panel') renderMatrix();
-    if (btn.dataset.panel === 'detail-panel') renderDetail();
+    const panel = btn.dataset.panel;
+    // If going to analysis without a tournament, ignore
+    if (panel !== 'home-panel' && !currentTournamentId) return;
+    switchPanel(panel);
   }});
 }});
+
+// Back to home button
+document.getElementById('btn-back-home').addEventListener('click', () => switchPanel('home-panel'));
+
+// Hide stats ribbon initially
+document.querySelector('.stats-ribbon').style.display = 'none';
 
 /* ══════════════════════════════════════════════════
    UTILITY
@@ -666,8 +790,76 @@ document.querySelectorAll('#meta-tbl thead th[data-key]').forEach(th => {{
 document.getElementById('f-min').addEventListener('input', renderMetaTable);
 document.getElementById('f-search').addEventListener('input', renderMetaTable);
 
-/* Initial load */
-loadTournament(currentTournamentId);
+/* Render home panel tournament list */
+function renderHomeTournaments() {{
+  const grid = document.getElementById('t-grid');
+  const tids = Object.keys(ALL_TOURNAMENTS);
+  
+  if (tids.length === 0) {{
+    grid.innerHTML = '<div class="t-empty">No hay torneos cargados todavía.<br>Usa el formulario de arriba para añadir uno.</div>';
+    document.getElementById('t-grid-title').textContent = '';
+    return;
+  }}
+
+  document.getElementById('t-grid-title').textContent = tids.length + ' torneo' + (tids.length !== 1 ? 's' : '') + ' disponible' + (tids.length !== 1 ? 's' : '');
+
+  grid.innerHTML = tids.map(tid => {{
+    const t = ALL_TOURNAMENTS[tid].tournament;
+    const pilots = ALL_TOURNAMENTS[tid].total_pilots;
+    return `<div class="t-card" data-tid="${{tid}}">
+      <div class="t-card-icon">🏆</div>
+      <div class="t-card-info">
+        <div class="t-card-name">${{esc(t.name)}}</div>
+        <div class="t-card-stats">
+          <span>👥 ${{pilots}} players</span>
+          <span>⚔️ ${{t.total_matches}} matches</span>
+          <span>🎲 ${{t.total_rounds}} rounds</span>
+        </div>
+      </div>
+      <div class="t-card-actions">
+        <button class="t-card-go" data-tid="${{tid}}">Analizar →</button>
+        <button class="t-card-del" data-tid="${{tid}}" title="Eliminar">✕</button>
+      </div>
+    </div>`;
+  }}).join('');
+
+  // Click card or "Analizar" button → open analysis
+  grid.querySelectorAll('.t-card-go').forEach(btn => {{
+    btn.addEventListener('click', e => {{
+      e.stopPropagation();
+      openTournamentAnalysis(btn.dataset.tid);
+    }});
+  }});
+  grid.querySelectorAll('.t-card').forEach(card => {{
+    card.addEventListener('click', () => openTournamentAnalysis(card.dataset.tid));
+  }});
+
+  // Delete button
+  grid.querySelectorAll('.t-card-del').forEach(btn => {{
+    btn.addEventListener('click', async e => {{
+      e.stopPropagation();
+      const tid = btn.dataset.tid;
+      const name = ALL_TOURNAMENTS[tid]?.tournament?.name || tid;
+      if (!confirm(`¿Eliminar "${{name}}"?`)) return;
+      try {{
+        const res = await fetch(`/api/tournaments/${{tid}}`, {{ method: 'DELETE' }});
+        const data = await res.json();
+        if (data.ok) {{
+          setTimeout(() => window.location.reload(), 400);
+        }} else {{
+          alert('Error: ' + data.error);
+        }}
+      }} catch (err) {{
+        // If running as static file, remove from local state
+        delete ALL_TOURNAMENTS[tid];
+        renderHomeTournaments();
+      }}
+    }});
+  }});
+}}
+
+/* Initial render of home panel */
+renderHomeTournaments();
 
 /* ══════════════════════════════════════════════════
    MATCHUP MATRIX
@@ -883,10 +1075,161 @@ document.getElementById('dd-min').addEventListener('input', renderDetail);
    KEYBOARD SHORTCUTS
    ══════════════════════════════════════════════════ */
 document.addEventListener('keydown', e => {{
-  if (e.key === '1') document.querySelector('.nav-btn[data-panel="meta-panel"]').click();
-  if (e.key === '2') document.querySelector('.nav-btn[data-panel="matrix-panel"]').click();
-  if (e.key === '3') document.querySelector('.nav-btn[data-panel="detail-panel"]').click();
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === '0') switchPanel('home-panel');
+  if (e.key === '1' && currentTournamentId) switchPanel('meta-panel');
+  if (e.key === '2' && currentTournamentId) switchPanel('matrix-panel');
+  if (e.key === '3' && currentTournamentId) switchPanel('detail-panel');
 }});
+
+/* ══════════════════════════════════════════════════
+   ADD TOURNAMENT — API-powered (home panel)
+   ══════════════════════════════════════════════════ */
+const statusEl = document.getElementById('add-status');
+const progressWrap = document.getElementById('progress-wrap');
+const progressFill = document.getElementById('progress-fill');
+const progressText = document.getElementById('progress-text');
+const progressPct = document.getElementById('progress-pct');
+
+function showStatus(msg, type) {{
+  statusEl.className = 'add-status ' + type;
+  statusEl.innerHTML = msg;
+}}
+
+function setProgress(pct, text) {{
+  progressFill.classList.remove('indeterminate');
+  progressFill.style.width = pct + '%';
+  progressPct.textContent = Math.round(pct) + '%';
+  if (text) progressText.textContent = text;
+}}
+
+function setStep(stepName, state) {{
+  const el = document.querySelector(`.progress-step[data-step="${{stepName}}"]`);
+  if (el) el.className = 'progress-step ' + state;
+}}
+
+function resetProgress() {{
+  progressWrap.classList.remove('active');
+  progressFill.style.width = '0%';
+  progressFill.classList.remove('indeterminate');
+  progressPct.textContent = '0%';
+  progressText.textContent = 'Preparando...';
+  document.querySelectorAll('.progress-step').forEach(s => s.className = 'progress-step');
+}}
+
+// Simulate progress during long scrape
+let progressTimer = null;
+function startSimulatedProgress() {{
+  let pct = 5;
+  const steps = [
+    {{at: 5, step: 'validate', text: 'Validando URL...'}},
+    {{at: 10, step: 'connect', text: 'Conectando con melee.gg...'}},
+    {{at: 20, step: 'rounds', text: 'Descargando info de rondas...'}},
+    {{at: 35, step: 'matches', text: 'Procesando partidas... esto tarda 1-2 min'}},
+    {{at: 65, step: 'matrix', text: 'Construyendo matrix de matchups...'}},
+    {{at: 85, step: 'save', text: 'Guardando datos y regenerando sitio...'}},
+  ];
+  let stepIdx = 0;
+
+  setProgress(5, 'Validando URL...');
+  setStep('validate', 'active');
+
+  progressTimer = setInterval(() => {{
+    // Slow down as we get higher (simulate long wait)
+    const increment = pct < 30 ? 1.2 : pct < 60 ? 0.4 : pct < 80 ? 0.15 : 0.05;
+    pct = Math.min(pct + increment, 92);
+    setProgress(pct);
+
+    // Advance step markers
+    while (stepIdx < steps.length && pct >= steps[stepIdx].at) {{
+      if (stepIdx > 0) setStep(steps[stepIdx - 1].step, 'done');
+      setStep(steps[stepIdx].step, 'active');
+      progressText.textContent = steps[stepIdx].text;
+      stepIdx++;
+    }}
+  }}, 800);
+}}
+
+function stopSimulatedProgress() {{
+  if (progressTimer) {{ clearInterval(progressTimer); progressTimer = null; }}
+}}
+
+// Añadir torneo via API
+document.getElementById('btn-do-add').addEventListener('click', async () => {{
+  const url = document.getElementById('add-url').value.trim();
+  if (!url) {{ showStatus('⚠️ Pega una URL de melee.gg', 'error'); return; }}
+
+  // Validate URL format
+  if (!url.match(/melee\.gg/i) && !url.match(/^\d+$/)) {{
+    showStatus('⚠️ Introduce una URL válida de melee.gg o un ID numérico de torneo.', 'error');
+    return;
+  }}
+
+  const btn = document.getElementById('btn-do-add');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="add-spinner"></span> Scrapeando...';
+  document.getElementById('add-url').disabled = true;
+  statusEl.className = 'add-status';
+  statusEl.innerHTML = '';
+
+  // Show and start progress bar
+  resetProgress();
+  progressWrap.classList.add('active');
+  startSimulatedProgress();
+
+  try {{
+    // 3-minute timeout for scraping
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 180000);
+
+    const res = await fetch('/api/tournaments/add-sync', {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ url: url }}),
+      signal: controller.signal,
+    }});
+    clearTimeout(timeout);
+    const data = await res.json();
+
+    stopSimulatedProgress();
+
+    if (data.ok) {{
+      // Complete the progress bar
+      document.querySelectorAll('.progress-step').forEach(s => s.className = 'progress-step done');
+      setProgress(100, '¡Completado!');
+
+      if (data.action === 'already_exists') {{
+        showStatus(`✅ <strong>${{data.name}}</strong> — ya estaba cargado. Recargando...`, 'success');
+      }} else {{
+        showStatus(`🎉 ¡Añadido! <strong>${{data.name}}</strong> — ${{data.total_matches}} partidas, ${{data.total_players || '?'}} jugadores. Recargando...`, 'success');
+      }}
+      setTimeout(() => window.location.reload(), 1500);
+      return;
+    }} else {{
+      document.querySelectorAll('.progress-step.active').forEach(s => s.className = 'progress-step error');
+      setProgress(0, 'Error');
+      showStatus(`❌ Error: ${{data.error}}`, 'error');
+    }}
+  }} catch (err) {{
+    stopSimulatedProgress();
+    document.querySelectorAll('.progress-step.active').forEach(s => s.className = 'progress-step error');
+    if (err.name === 'AbortError') {{
+      showStatus('❌ Timeout: el scraping tardó más de 3 minutos. Inténtalo de nuevo.', 'error');
+    }} else {{
+      showStatus(`❌ No se pudo conectar con el servidor. Asegúrate de lanzar <code>python server.py</code>.`, 'error');
+    }}
+  }}
+
+  btn.disabled = false;
+  btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg> Scrapear';
+  document.getElementById('add-url').disabled = false;
+}});
+
+// Enter en el input
+document.getElementById('add-url').addEventListener('keydown', e => {{
+  if (e.key === 'Enter') document.getElementById('btn-do-add').click();
+}});
+
 </script>
 </body>
 </html>"""
