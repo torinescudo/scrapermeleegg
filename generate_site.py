@@ -277,6 +277,10 @@ a:hover{{color:var(--accent-hover)}}
 .t-card-del:hover{{border-color:var(--red);color:var(--red);background:rgba(248,113,113,.08)}}
 .t-empty{{text-align:center;padding:2rem;color:var(--text-3);font-size:.9rem}}
 
+/* Static mode: hide server-only features */
+.static-mode .add-box{{display:none}}
+.static-mode .t-card-del{{display:none}}
+
 /* Active tournament bar (shown in analysis views) */
 .active-bar{{background:var(--bg-2);border-bottom:1px solid var(--border);padding:.5rem 1.5rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap;display:none}}
 .active-bar.show{{display:flex}}
@@ -433,11 +437,11 @@ a:hover{{color:var(--accent-hover)}}
   <div id="home-panel" class="panel active">
     <div class="home-hero">
       <h1>🎴 <span>MTG Meta Analyzer</span></h1>
-      <p>Selecciona un torneo para ver su metagame, matrix de matchups y detalle de mazos. Puedes añadir cualquier torneo de melee.gg.</p>
+      <p>Selecciona un torneo para ver su metagame, matrix de matchups y detalle de mazos.</p>
     </div>
 
-    <!-- Add tournament box -->
-    <div class="add-box">
+    <!-- Add tournament box (hidden in static mode) -->
+    <div class="add-box" id="add-box">
       <div class="add-box-label">
         <svg viewBox="0 0 24 24"><path d="M12 4v16m8-8H4" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round"/></svg>
         Añadir nuevo torneo
@@ -579,6 +583,13 @@ a:hover{{color:var(--accent-hover)}}
    ══════════════════════════════════════════════════ */
 const ALL_TOURNAMENTS = {all_tournaments_json};
 const PIE_COLORS = {pie_colors_json};
+
+/* Detect static mode (no API server) */
+let IS_STATIC = true;
+fetch('/api/status').then(r => r.json()).then(d => {{
+  if (d.ok) {{ IS_STATIC = false; document.body.classList.remove('static-mode'); }}
+}}).catch(() => {{}});
+document.body.classList.add('static-mode');
 
 /* Current tournament state */
 let currentTournamentId = null;

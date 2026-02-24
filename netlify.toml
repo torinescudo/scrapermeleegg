@@ -1,4 +1,5 @@
 [build]
+  command = "python generate_site.py"
   publish = "dist"
 
 [[headers]]
