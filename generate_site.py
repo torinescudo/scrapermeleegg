@@ -48,11 +48,14 @@ def build_metagame(data: dict) -> dict:
     deck_counts = Counter(player_deck.values())
     total_pilots = len(player_deck)
 
-    # ── Per-deck win/loss/draw stats from matches
+    # ── Per-deck and per-player win/loss/draw stats from matches
     deck_stats = defaultdict(lambda: {"wins": 0, "losses": 0, "draws": 0})
+    player_stats = defaultdict(lambda: {"wins": 0, "losses": 0, "draws": 0})
     for m in matches:
         d1 = m.get("player1_deck")
         d2 = m.get("player2_deck")
+        p1 = m.get("player1")
+        p2 = m.get("player2")
         if not d1 or not d2:
             continue
         p1w = m.get("player1_wins") or 0
@@ -60,12 +63,36 @@ def build_metagame(data: dict) -> dict:
         if p1w > p2w:
             deck_stats[d1]["wins"] += 1
             deck_stats[d2]["losses"] += 1
+            if p1: player_stats[p1]["wins"] += 1
+            if p2: player_stats[p2]["losses"] += 1
         elif p2w > p1w:
             deck_stats[d1]["losses"] += 1
             deck_stats[d2]["wins"] += 1
+            if p1: player_stats[p1]["losses"] += 1
+            if p2: player_stats[p2]["wins"] += 1
         else:
             deck_stats[d1]["draws"] += 1
             deck_stats[d2]["draws"] += 1
+            if p1: player_stats[p1]["draws"] += 1
+            if p2: player_stats[p2]["draws"] += 1
+
+    # ── Group pilots by deck
+    deck_pilots = defaultdict(list)
+    for player, deck in player_deck.items():
+        ps = player_stats[player]
+        pt = ps["wins"] + ps["losses"] + ps["draws"]
+        pwr = (ps["wins"] / pt * 100) if pt > 0 else 0
+        deck_pilots[deck].append({
+            "name": player,
+            "w": ps["wins"],
+            "l": ps["losses"],
+            "d": ps["draws"],
+            "t": pt,
+            "wr": round(pwr, 1),
+        })
+    # Sort pilots within each deck by winrate desc, then matches desc
+    for dk in deck_pilots:
+        deck_pilots[dk].sort(key=lambda p: (-p["wr"], -p["t"]))
 
     # ── Build archetype list sorted by count
     archetypes = []
@@ -83,6 +110,7 @@ def build_metagame(data: dict) -> dict:
             "draws": st["draws"],
             "total": total_m,
             "winrate": round(wr, 2),
+            "pilots": deck_pilots.get(deck_name, []),
         })
 
     # ── Matchup matrix (only decks with >= 1 match)
@@ -109,7 +137,7 @@ def build_metagame(data: dict) -> dict:
         "matrix_decks": matrix_decks,
         "matrix": matrix,
         "total_pilots": total_pilots,
-        "matches_sample": matches[:200],  # sample for detail view
+        "matches_sample": matches[:200],  # sample for detail view (kept for compat)
     }
 
 
@@ -565,6 +593,7 @@ a:hover{{color:var(--accent-hover)}}
       </div>
       <div class="card-body">
         <div id="dd-overview" style="margin-bottom:1.5rem"></div>
+        <div id="dd-pilots" style="margin-bottom:1.5rem"></div>
         <h3 style="font-size:.95rem;color:var(--text-0);margin-bottom:.75rem">Matchup Breakdown</h3>
         <div id="dd-matchups"></div>
       </div>
@@ -1023,6 +1052,38 @@ function renderDetail() {{
       </div>
     </div>`;
 
+  // Pilots table
+  const pilotsContainer = document.getElementById('dd-pilots');
+  const pilots = arch.pilots || [];
+  if (pilots.length > 0) {{
+    let ph = '<div class="card" style="margin-bottom:0"><div class="card-header"><h2 style="font-size:.9rem;color:var(--accent)">✦ Pilots (${{pilots.length}})</h2></div><div class="card-body" style="padding:0">';
+    ph += '<table style="width:100%;border-collapse:collapse;font-size:.82rem">';
+    ph += '<thead><tr style="border-bottom:1px solid var(--border)">';
+    ph += '<th style="text-align:left;padding:8px 12px;color:var(--text-2);font-weight:600">Player</th>';
+    ph += '<th style="text-align:center;padding:8px 6px;color:var(--text-2);font-weight:600">W</th>';
+    ph += '<th style="text-align:center;padding:8px 6px;color:var(--text-2);font-weight:600">L</th>';
+    ph += '<th style="text-align:center;padding:8px 6px;color:var(--text-2);font-weight:600">D</th>';
+    ph += '<th style="text-align:center;padding:8px 6px;color:var(--text-2);font-weight:600">Matches</th>';
+    ph += '<th style="text-align:center;padding:8px 12px;color:var(--text-2);font-weight:600">Win Rate</th>';
+    ph += '</tr></thead><tbody>';
+    pilots.forEach((p, i) => {{
+      const bg = i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,.02)';
+      const wrC = wrColor(p.wr);
+      ph += `<tr style="border-bottom:1px solid var(--border);background:${{bg}}">`;
+      ph += `<td style="padding:6px 12px;color:var(--text-0);font-weight:500">${{esc(p.name)}}</td>`;
+      ph += `<td style="text-align:center;padding:6px;color:var(--green)">${{p.w}}</td>`;
+      ph += `<td style="text-align:center;padding:6px;color:var(--red)">${{p.l}}</td>`;
+      ph += `<td style="text-align:center;padding:6px;color:var(--yellow)">${{p.d}}</td>`;
+      ph += `<td style="text-align:center;padding:6px;color:var(--text-1)">${{p.t}}</td>`;
+      ph += `<td style="text-align:center;padding:6px 12px;font-weight:700;color:${{wrC}}">${{p.wr}}%</td>`;
+      ph += '</tr>';
+    }});
+    ph += '</tbody></table></div></div>';
+    pilotsContainer.innerHTML = ph;
+  }} else {{
+    pilotsContainer.innerHTML = '';
+  }}
+
   // Matchup bars
   const ri = MX_DECKS.indexOf(name);
   const matchups = [];
@@ -1172,7 +1233,7 @@ document.getElementById('btn-do-add').addEventListener('click', async () => {{
   if (!url) {{ showStatus('⚠️ Pega una URL de melee.gg', 'error'); return; }}
 
   // Validate URL format
-  if (!url.match(/melee[.]gg/i) && !url.match(/^\d+$/)) {{
+  if (!url.match(/melee[.]gg/i) && !url.match(/^\\d+$/)) {{
     showStatus('⚠️ Introduce una URL válida de melee.gg o un ID numérico de torneo.', 'error');
     return;
   }}
