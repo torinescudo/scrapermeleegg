@@ -23,11 +23,13 @@ import argparse
 import json
 import os
 import re
+import ssl
 import sys
 import time
 
 # Importar módulos del proyecto
 import melee_scraper as scraper
+import meta_analyzer
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +136,52 @@ class TournamentDB:
         tournament = scraper.scrape_tournament(tournament_id)
         matrix_data = scraper.build_matchup_matrix(tournament)
 
+        # Recopilar IDs de decklist únicos de los matches
+        decklist_ids = {}  # {id: {name, player}}
+        for match in tournament.matches:
+            if match.is_bye or not match.player1:
+                continue
+            if match.player1_decklist_id and match.player1_decklist_id not in decklist_ids:
+                decklist_ids[match.player1_decklist_id] = {
+                    "name": match.player1_decklist or "Unknown",
+                    "player": match.player1.display_name,
+                }
+            if match.player2 and match.player2_decklist_id and match.player2_decklist_id not in decklist_ids:
+                decklist_ids[match.player2_decklist_id] = {
+                    "name": match.player2_decklist or "Unknown",
+                    "player": match.player2.display_name,
+                }
+
+        # Descargar decklists carta por carta
+        decklists_data = {}
+        if decklist_ids:
+            print(f"[*] Descargando {len(decklist_ids)} decklists...")
+            ctx = ssl.create_default_context()
+            total_dl = len(decklist_ids)
+            for i, (dl_id, dl_info) in enumerate(decklist_ids.items()):
+                if (i + 1) % 50 == 0 or i == 0:
+                    print(f"  [{i+1}/{total_dl}] {dl_info['name']} ({dl_info['player']})...")
+                raw = meta_analyzer.fetch_decklist_details(dl_id, ctx)
+                if raw and raw.get("Records"):
+                    cards = []
+                    COMPONENTS = {0: "main", 99: "sideboard", 1: "companion"}
+                    for rec in raw.get("Records", []):
+                        cards.append({
+                            "name": rec.get("n", "Unknown"),
+                            "qty": rec.get("q", 0),
+                            "type": rec.get("t", "Unknown"),
+                            "component": COMPONENTS.get(rec.get("c", 0), "main"),
+                        })
+                    decklists_data[dl_id] = {
+                        "id": dl_id,
+                        "name": raw.get("DecklistName", dl_info["name"]),
+                        "player": dl_info["player"],
+                        "format": raw.get("FormatName", ""),
+                        "cards": cards,
+                    }
+                time.sleep(0.2)
+            print(f"[*] Decklists descargadas: {len(decklists_data)}/{total_dl}")
+
         # Construir datos para guardar (mismo formato que tournament_data.json)
         tournament_data = {
             "tournament": {
@@ -151,6 +199,7 @@ class TournamentDB:
                 },
             },
             "matches": matrix_data["player_matches"],
+            "decklists": decklists_data,
             "scraped_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
         }
 

@@ -35,14 +35,21 @@ def build_metagame(data: dict) -> dict:
     matrix_raw = data["matchup_matrix"]["matrix"]
     all_decks = data["matchup_matrix"]["decks"]
     tournament = data["tournament"]
+    raw_decklists = data.get("decklists", {})  # {decklist_id: {id,name,player,format,cards}}
 
     # ── Player → Deck mapping (last seen deck)
     player_deck = {}
+    # ── Player → Decklist ID mapping
+    player_decklist_id = {}
     for m in matches:
         if m.get("player1_deck"):
             player_deck[m["player1"]] = m["player1_deck"]
         if m.get("player2_deck"):
             player_deck[m["player2"]] = m["player2_deck"]
+        if m.get("player1_decklist_id"):
+            player_decklist_id[m["player1"]] = m["player1_decklist_id"]
+        if m.get("player2_decklist_id"):
+            player_decklist_id[m["player2"]] = m["player2_decklist_id"]
 
     # ── Deck counts (how many pilots)
     deck_counts = Counter(player_deck.values())
@@ -82,6 +89,7 @@ def build_metagame(data: dict) -> dict:
         ps = player_stats[player]
         pt = ps["wins"] + ps["losses"] + ps["draws"]
         pwr = (ps["wins"] / pt * 100) if pt > 0 else 0
+        dl_id = player_decklist_id.get(player)
         deck_pilots[deck].append({
             "name": player,
             "w": ps["wins"],
@@ -89,6 +97,7 @@ def build_metagame(data: dict) -> dict:
             "d": ps["draws"],
             "t": pt,
             "wr": round(pwr, 1),
+            "decklist_id": dl_id,
         })
     # Sort pilots within each deck by winrate desc, then matches desc
     for dk in deck_pilots:
@@ -131,14 +140,229 @@ def build_metagame(data: dict) -> dict:
                 row[d2] = {"w": w, "l": l, "d": dr, "t": t, "wr": round(wr, 1)}
         matrix.append(row)
 
+    # ── Build player decklists map: {player_name: decklist_data}
+    player_decklists = {}
+    for player_name, dl_id in player_decklist_id.items():
+        if dl_id and dl_id in raw_decklists:
+            player_decklists[player_name] = raw_decklists[dl_id]
+
+    # ── Deck iterations analysis (80% card similarity)
+    # Group decklists by deck name, then find iterations within each group
+    deck_iterations = _build_deck_iterations(raw_decklists, player_stats)
+
     return {
         "tournament": tournament,
         "archetypes": archetypes,
         "matrix_decks": matrix_decks,
         "matrix": matrix,
         "total_pilots": total_pilots,
-        "matches_sample": matches[:200],  # sample for detail view (kept for compat)
+        "matches_sample": matches[:200],
+        "player_decklists": player_decklists,
+        "deck_iterations": deck_iterations,
     }
+
+
+def _card_signature(decklist_data: dict) -> dict:
+    """
+    Build a card signature from a decklist: {card_name: quantity} for main deck only.
+    """
+    sig = {}
+    for card in decklist_data.get("cards", []):
+        if card.get("component") == "main":
+            sig[card["name"]] = card.get("qty", 0)
+    return sig
+
+
+def _card_similarity(sig1: dict, sig2: dict) -> float:
+    """
+    Calculate card similarity between two decklist signatures.
+    Similarity = (number of shared card slots) / (max total cards of either deck).
+    A 'shared card slot' is min(qty1, qty2) for each card present in both.
+    """
+    if not sig1 or not sig2:
+        return 0.0
+    shared = 0
+    for card, qty1 in sig1.items():
+        if card in sig2:
+            shared += min(qty1, sig2[card])
+    total1 = sum(sig1.values())
+    total2 = sum(sig2.values())
+    max_total = max(total1, total2)
+    if max_total == 0:
+        return 0.0
+    return shared / max_total
+
+
+def _build_deck_iterations(raw_decklists: dict, player_stats: dict) -> list:
+    """
+    Group decklists that share >= 80% of their main deck cards as 'iterations'
+    of the same archetype. For each group, identify the best and worst performing
+    iteration based on the pilot's win rate.
+
+    Returns a list of iteration groups:
+    [
+        {
+            "archetype": str,            # deck name / archetype name
+            "iterations": [
+                {
+                    "decklist_id": str,
+                    "player": str,
+                    "deck_name": str,
+                    "cards": [...],
+                    "wins": int, "losses": int, "draws": int,
+                    "winrate": float,
+                    "is_best": bool,
+                    "is_worst": bool,
+                    "diff_from_best": [{"card": str, "qty_diff": int, "component": str}]
+                }
+            ],
+            "shared_core": [{"name": str, "qty": int}],  # cards all iterations share
+            "best_wr": float,
+            "worst_wr": float,
+        }
+    ]
+    """
+    SIMILARITY_THRESHOLD = 0.80
+
+    if not raw_decklists:
+        return []
+
+    # Build signatures and group by deck name first
+    by_deck_name = defaultdict(list)
+    for dl_id, dl_data in raw_decklists.items():
+        deck_name = dl_data.get("name", "Unknown")
+        player = dl_data.get("player", "Unknown")
+        sig = _card_signature(dl_data)
+        ps = player_stats.get(player, {"wins": 0, "losses": 0, "draws": 0})
+        pt = ps["wins"] + ps["losses"] + ps["draws"]
+        wr = (ps["wins"] / pt * 100) if pt > 0 else 0
+        by_deck_name[deck_name].append({
+            "dl_id": dl_id,
+            "player": player,
+            "deck_name": deck_name,
+            "sig": sig,
+            "cards": dl_data.get("cards", []),
+            "wins": ps["wins"],
+            "losses": ps["losses"],
+            "draws": ps["draws"],
+            "total": pt,
+            "winrate": round(wr, 1),
+        })
+
+    # Now cross-group: merge deck name groups that have >= 80% similarity
+    # Use union-find on groups
+    all_groups = list(by_deck_name.keys())
+    # For each pair of deck names, check if their representative decklists are similar
+    parent = {g: g for g in all_groups}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    # Compare representative decklist from each group
+    group_reps = {}
+    for gname, entries in by_deck_name.items():
+        # Take the first decklist as representative
+        group_reps[gname] = entries[0]["sig"]
+
+    group_names = list(group_reps.keys())
+    for i in range(len(group_names)):
+        for j in range(i + 1, len(group_names)):
+            sim = _card_similarity(group_reps[group_names[i]], group_reps[group_names[j]])
+            if sim >= SIMILARITY_THRESHOLD:
+                union(group_names[i], group_names[j])
+
+    # Build merged groups
+    merged = defaultdict(list)
+    for gname, entries in by_deck_name.items():
+        root = find(gname)
+        merged[root].extend(entries)
+
+    # Build iteration data for groups with > 1 unique decklist
+    result = []
+    for group_name, entries in merged.items():
+        if len(entries) < 2:
+            continue
+
+        # Check that there are at least 2 distinct decklists (not just 2 same list)
+        unique_sigs = set()
+        for e in entries:
+            sig_key = tuple(sorted(e["sig"].items()))
+            unique_sigs.add(sig_key)
+        if len(unique_sigs) < 2:
+            continue
+
+        # Sort by winrate
+        entries_sorted = sorted(entries, key=lambda e: (-e["winrate"], -e["total"]))
+        best_wr = entries_sorted[0]["winrate"]
+        worst_wr = entries_sorted[-1]["winrate"]
+
+        # Find shared core (cards present in ALL iterations at minimum quantity)
+        all_sigs = [e["sig"] for e in entries]
+        shared_core = {}
+        if all_sigs:
+            first = all_sigs[0]
+            for card, qty in first.items():
+                min_qty = qty
+                in_all = True
+                for sig in all_sigs[1:]:
+                    if card not in sig:
+                        in_all = False
+                        break
+                    min_qty = min(min_qty, sig[card])
+                if in_all and min_qty > 0:
+                    shared_core[card] = min_qty
+
+        # Mark best/worst
+        best_sig = entries_sorted[0]["sig"]
+        iterations = []
+        for e in entries_sorted:
+            # Compute diff from best
+            diff = []
+            for card, qty in e["sig"].items():
+                best_qty = best_sig.get(card, 0)
+                if qty != best_qty:
+                    diff.append({"card": card, "qty_diff": qty - best_qty, "component": "main"})
+            for card, qty in best_sig.items():
+                if card not in e["sig"]:
+                    diff.append({"card": card, "qty_diff": -qty, "component": "main"})
+
+            iterations.append({
+                "decklist_id": e["dl_id"],
+                "player": e["player"],
+                "deck_name": e["deck_name"],
+                "cards": e["cards"],
+                "wins": e["wins"],
+                "losses": e["losses"],
+                "draws": e["draws"],
+                "total": e["total"],
+                "winrate": e["winrate"],
+                "is_best": e is entries_sorted[0],
+                "is_worst": e is entries_sorted[-1],
+                "diff_from_best": diff,
+            })
+
+        shared_core_list = [{"name": c, "qty": q} for c, q in sorted(shared_core.items())]
+        result.append({
+            "archetype": group_name,
+            "iterations": iterations,
+            "shared_core": shared_core_list,
+            "best_wr": best_wr,
+            "worst_wr": worst_wr,
+            "total_lists": len(entries),
+            "unique_lists": len(unique_sigs),
+        })
+
+    # Sort by number of iterations desc
+    result.sort(key=lambda g: g["total_lists"], reverse=True)
+    return result
 
 
 # ── Color palette for pie chart ────────────────────────────────────────────
@@ -166,12 +390,51 @@ def generate_html(all_metas: dict) -> str:
     for tid, meta in all_metas.items():
         if first_id is None:
             first_id = tid
+
+        # Compact player_decklists: only include cards, not full objects
+        compact_decklists = {}
+        for player_name, dl in meta.get("player_decklists", {}).items():
+            compact_decklists[player_name] = {
+                "id": dl.get("id", ""),
+                "name": dl.get("name", ""),
+                "cards": dl.get("cards", []),
+            }
+
+        # Compact iterations: limit to top 20 groups, max 15 iterations each
+        raw_iterations = meta.get("deck_iterations", [])
+        compact_iterations = []
+        for grp in raw_iterations[:20]:
+            compact_iters = []
+            for it in grp["iterations"][:15]:
+                compact_iters.append({
+                    "player": it["player"],
+                    "deck_name": it["deck_name"],
+                    "cards": it["cards"],
+                    "w": it["wins"], "l": it["losses"], "d": it["draws"],
+                    "t": it["total"],
+                    "wr": it["winrate"],
+                    "is_best": it["is_best"],
+                    "is_worst": it["is_worst"],
+                    "diff": it["diff_from_best"][:20],  # limit diffs
+                })
+            compact_iterations.append({
+                "archetype": grp["archetype"],
+                "iterations": compact_iters,
+                "shared_core": grp["shared_core"],
+                "best_wr": grp["best_wr"],
+                "worst_wr": grp["worst_wr"],
+                "total": grp["total_lists"],
+                "unique": grp["unique_lists"],
+            })
+
         tournaments_js[tid] = {
             "tournament": meta["tournament"],
             "archetypes": meta["archetypes"],
             "matrix_decks": meta["matrix_decks"],
             "matrix": meta["matrix"],
             "total_pilots": meta["total_pilots"],
+            "player_decklists": compact_decklists,
+            "deck_iterations": compact_iterations,
         }
 
     all_tournaments_json = json.dumps(tournaments_js, ensure_ascii=False)
@@ -396,6 +659,49 @@ a:hover{{color:var(--accent-hover)}}
 .matchup-bar .wr-val{{width:45px;text-align:right;font-weight:600;font-variant-numeric:tabular-nums}}
 .matchup-bar .rec{{color:var(--text-3);font-size:.72rem;width:60px;text-align:right}}
 
+/* ═══════════════ PLAYER DECKLISTS PANEL ═══════════════ */
+.dl-grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:1rem;margin-top:1rem}}
+.dl-card{{background:var(--bg-1);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;transition:var(--transition)}}
+.dl-card:hover{{border-color:var(--accent)}}
+.dl-card-header{{padding:.75rem 1rem;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}}
+.dl-card-header .player-name{{font-weight:700;color:var(--text-0);font-size:.9rem}}
+.dl-card-header .deck-label{{font-size:.75rem;color:var(--accent);background:rgba(99,102,241,.12);padding:2px 8px;border-radius:12px}}
+.dl-card-header .wr-pill{{font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:12px}}
+.dl-card-body{{padding:.75rem 1rem;max-height:400px;overflow-y:auto}}
+.dl-section-title{{color:var(--yellow);font-weight:600;font-size:.75rem;margin:8px 0 4px;text-transform:uppercase;letter-spacing:.05em}}
+.dl-card-entry{{font-size:.78rem;color:var(--text-1);padding:1px 0;display:flex;gap:6px}}
+.dl-card-entry .qty{{color:var(--accent);font-weight:700;min-width:18px;text-align:right}}
+.dl-card-entry .cname{{flex:1}}
+
+/* ═══════════════ DECK ITERATIONS PANEL ═══════════════ */
+.iter-group{{background:var(--bg-1);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:1.5rem;overflow:hidden}}
+.iter-group-header{{padding:1rem 1.25rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:1rem;cursor:pointer;transition:var(--transition);flex-wrap:wrap}}
+.iter-group-header:hover{{background:var(--bg-2)}}
+.iter-group-header h3{{font-size:1rem;color:var(--text-0);font-weight:700}}
+.iter-group-header .iter-badge{{font-size:.72rem;padding:3px 10px;border-radius:12px;font-weight:600}}
+.iter-group-header .iter-badge.best{{background:rgba(52,211,153,.15);color:var(--green)}}
+.iter-group-header .iter-badge.worst{{background:rgba(248,113,113,.15);color:var(--red)}}
+.iter-group-header .iter-badge.count{{background:rgba(99,102,241,.12);color:var(--accent)}}
+.iter-body{{display:none;padding:1rem 1.25rem}}
+.iter-body.open{{display:block}}
+.iter-list-grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:1rem}}
+.iter-card{{background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:1rem;position:relative}}
+.iter-card.is-best{{border-color:var(--green);box-shadow:0 0 8px rgba(52,211,153,.15)}}
+.iter-card.is-worst{{border-color:var(--red);box-shadow:0 0 8px rgba(248,113,113,.15)}}
+.iter-card .iter-label{{position:absolute;top:8px;right:8px;font-size:.65rem;font-weight:700;padding:2px 8px;border-radius:10px;text-transform:uppercase}}
+.iter-card .iter-label.best{{background:var(--green);color:#000}}
+.iter-card .iter-label.worst{{background:var(--red);color:#fff}}
+.iter-card .iter-player{{font-weight:700;color:var(--text-0);font-size:.9rem;margin-bottom:4px}}
+.iter-card .iter-stats{{display:flex;gap:1rem;font-size:.78rem;color:var(--text-2);margin-bottom:.75rem}}
+.iter-card .iter-stats .wr-val{{font-weight:700}}
+.iter-diff{{margin-top:.75rem;border-top:1px solid var(--border);padding-top:.75rem}}
+.iter-diff-title{{font-size:.72rem;color:var(--text-3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}}
+.iter-diff-entry{{font-size:.78rem;padding:1px 0;display:flex;gap:6px}}
+.iter-diff-entry.added{{color:var(--green)}}
+.iter-diff-entry.removed{{color:var(--red)}}
+.iter-shared{{margin-bottom:1rem}}
+.iter-shared-title{{font-size:.78rem;font-weight:600;color:var(--text-2);margin-bottom:.5rem}}
+
 /* ═══════════════ RESPONSIVE ═══════════════ */
 @media(max-width:768px){{
   .topbar{{padding:0 .75rem}}
@@ -437,6 +743,14 @@ a:hover{{color:var(--accent-hover)}}
     <button class="nav-btn" data-panel="detail-panel" id="nav-detail">
       <svg viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
       Deck Detail
+    </button>
+    <button class="nav-btn" data-panel="decklists-panel" id="nav-decklists">
+      <svg viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:2"><path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+      Decklists
+    </button>
+    <button class="nav-btn" data-panel="iterations-panel" id="nav-iterations">
+      <svg viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:2"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+      Iteraciones
     </button>
   </nav>
 </header>
@@ -600,6 +914,46 @@ a:hover{{color:var(--accent-hover)}}
     </div>
   </div>
 
+  <!-- ──── DECKLISTS PANEL ──── -->
+  <div id="decklists-panel" class="panel">
+    <div class="card">
+      <div class="card-header">
+        <h2>📋 Decklists de Jugadores</h2>
+        <div class="filters">
+          <label>Buscar jugador</label>
+          <input class="filter-input" type="text" id="dl-search" placeholder="Nombre del jugador..." style="width:200px">
+          <label>Deck</label>
+          <select class="filter-input" id="dl-deck-filter" style="width:200px"><option value="">Todos</option></select>
+        </div>
+      </div>
+      <div class="card-body">
+        <p style="color:var(--text-2);font-size:.82rem;margin-bottom:1rem">
+          Haz clic en un jugador para ver su decklist completa carta por carta.
+        </p>
+        <div id="dl-container"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ──── ITERATIONS PANEL ──── -->
+  <div id="iterations-panel" class="panel">
+    <div class="card">
+      <div class="card-header">
+        <h2>🔄 Iteraciones de Deck (≥80% cartas compartidas)</h2>
+        <div class="filters">
+          <label>Buscar</label>
+          <input class="filter-input" type="text" id="iter-search" placeholder="Filtrar arquetipo..." style="width:200px">
+        </div>
+      </div>
+      <div class="card-body">
+        <p style="color:var(--text-2);font-size:.82rem;margin-bottom:1rem">
+          Decks con ≥80% de cartas en común agrupados como iteraciones. Se identifica la <span style="color:var(--green);font-weight:700">mejor</span> y <span style="color:var(--red);font-weight:700">peor</span> versión por win rate.
+        </p>
+        <div id="iter-container"></div>
+      </div>
+    </div>
+  </div>
+
 </div><!-- /main -->
 </div><!-- /app -->
 
@@ -625,6 +979,8 @@ let currentTournamentId = null;
 let ARCHETYPES = [];
 let MX_DECKS   = [];
 let MX_DATA    = [];
+let PLAYER_DECKLISTS = {{}};
+let DECK_ITERATIONS = [];
 
 function loadTournament(tid) {{
   const t = ALL_TOURNAMENTS[tid];
@@ -633,6 +989,8 @@ function loadTournament(tid) {{
   ARCHETYPES = t.archetypes;
   MX_DECKS   = t.matrix_decks;
   MX_DATA    = t.matrix;
+  PLAYER_DECKLISTS = t.player_decklists || {{}};
+  DECK_ITERATIONS  = t.deck_iterations || [];
 
   // Update stats ribbon
   const info = t.tournament;
@@ -646,11 +1004,16 @@ function loadTournament(tid) {{
 
   // Re-render active panel
   populateSelect();
+  populateDeckFilter();
   renderMetaTable();
   const matrixPanel = document.getElementById('matrix-panel');
   if (matrixPanel.classList.contains('active')) renderMatrix();
   const detailPanel = document.getElementById('detail-panel');
   if (detailPanel.classList.contains('active')) renderDetail();
+  const dlPanel = document.getElementById('decklists-panel');
+  if (dlPanel.classList.contains('active')) renderDecklists();
+  const iterPanel = document.getElementById('iterations-panel');
+  if (iterPanel.classList.contains('active')) renderIterations();
 }}
 
 /* Navigate to tournament analysis */
@@ -677,6 +1040,8 @@ function switchPanel(panelId) {{
 
   if (panelId === 'matrix-panel') renderMatrix();
   if (panelId === 'detail-panel') renderDetail();
+  if (panelId === 'decklists-panel') renderDecklists();
+  if (panelId === 'iterations-panel') renderIterations();
 }}
 
 document.querySelectorAll('.nav-btn').forEach(btn => {{
@@ -1065,10 +1430,12 @@ function renderDetail() {{
     ph += '<th style="text-align:center;padding:8px 6px;color:var(--text-2);font-weight:600">D</th>';
     ph += '<th style="text-align:center;padding:8px 6px;color:var(--text-2);font-weight:600">Matches</th>';
     ph += '<th style="text-align:center;padding:8px 12px;color:var(--text-2);font-weight:600">Win Rate</th>';
+    ph += '<th style="text-align:center;padding:8px 12px;color:var(--text-2);font-weight:600">Decklist</th>';
     ph += '</tr></thead><tbody>';
     pilots.forEach((p, i) => {{
       const bg = i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,.02)';
       const wrC = wrColor(p.wr);
+      const hasDl = PLAYER_DECKLISTS[p.name];
       ph += `<tr style="border-bottom:1px solid var(--border);background:${{bg}}">`;
       ph += `<td style="padding:6px 12px;color:var(--text-0);font-weight:500">${{esc(p.name)}}</td>`;
       ph += `<td style="text-align:center;padding:6px;color:var(--green)">${{p.w}}</td>`;
@@ -1076,6 +1443,11 @@ function renderDetail() {{
       ph += `<td style="text-align:center;padding:6px;color:var(--yellow)">${{p.d}}</td>`;
       ph += `<td style="text-align:center;padding:6px;color:var(--text-1)">${{p.t}}</td>`;
       ph += `<td style="text-align:center;padding:6px 12px;font-weight:700;color:${{wrC}}">${{p.wr}}%</td>`;
+      if (hasDl) {{
+        ph += `<td style="text-align:center;padding:6px 12px"><button onclick="viewPlayerDeck('${{esc(p.name).replace(/'/g, "\\\\'")}}')" style="background:var(--accent);color:#fff;border:none;padding:3px 10px;border-radius:6px;font-size:.72rem;cursor:pointer;font-weight:600">📋 Ver</button></td>`;
+      }} else {{
+        ph += `<td style="text-align:center;padding:6px 12px;color:var(--text-3);font-size:.72rem">—</td>`;
+      }}
       ph += '</tr>';
     }});
     ph += '</tbody></table></div></div>';
@@ -1145,6 +1517,219 @@ document.getElementById('dd-select').addEventListener('change', renderDetail);
 document.getElementById('dd-min').addEventListener('input', renderDetail);
 
 /* ══════════════════════════════════════════════════
+   VIEW PLAYER DECK (modal/popup from pilots table)
+   ══════════════════════════════════════════════════ */
+function viewPlayerDeck(playerName) {{
+  // Switch to decklists panel with player pre-selected
+  document.getElementById('dl-search').value = playerName;
+  switchPanel('decklists-panel');
+}}
+
+/* ══════════════════════════════════════════════════
+   DECKLISTS PANEL
+   ══════════════════════════════════════════════════ */
+function populateDeckFilter() {{
+  const sel = document.getElementById('dl-deck-filter');
+  const decks = [...new Set(Object.values(PLAYER_DECKLISTS).map(dl => dl.name))].sort();
+  sel.innerHTML = '<option value="">Todos los decks</option>' +
+    decks.map(d => `<option value="${{esc(d)}}">${{esc(d)}}</option>`).join('');
+}}
+
+function renderDecklists() {{
+  const search = document.getElementById('dl-search').value.toLowerCase();
+  const deckFilter = document.getElementById('dl-deck-filter').value;
+  const container = document.getElementById('dl-container');
+
+  const players = Object.keys(PLAYER_DECKLISTS).filter(name => {{
+    if (search && !name.toLowerCase().includes(search)) return false;
+    if (deckFilter && PLAYER_DECKLISTS[name].name !== deckFilter) return false;
+    return true;
+  }}).sort();
+
+  if (Object.keys(PLAYER_DECKLISTS).length === 0) {{
+    container.innerHTML = '<div style="text-align:center;padding:3rem;color:var(--text-3)"><div style="font-size:2rem;margin-bottom:.5rem">📭</div><div>No hay decklists disponibles para este torneo.<br>Re-scrapea el torneo para descargar las decklists carta por carta.</div></div>';
+    return;
+  }}
+
+  if (players.length === 0) {{
+    container.innerHTML = '<div style="color:var(--text-3);text-align:center;padding:2rem">No se encontraron jugadores con ese filtro.</div>';
+    return;
+  }}
+
+  // Build pilot stats lookup
+  const pilotStats = {{}};
+  ARCHETYPES.forEach(a => {{
+    (a.pilots || []).forEach(p => {{ pilotStats[p.name] = p; }});
+  }});
+
+  let html = `<div style="color:var(--text-2);font-size:.8rem;margin-bottom:1rem">${{players.length}} jugador(es) encontrados</div>`;
+  html += '<div class="dl-grid">';
+
+  players.forEach(name => {{
+    const dl = PLAYER_DECKLISTS[name];
+    const ps = pilotStats[name] || {{}};
+    const wr = ps.wr || 0;
+    const wrC = wrCls(wr);
+    const main = (dl.cards || []).filter(c => c.component === 'main');
+    const side = (dl.cards || []).filter(c => c.component === 'sideboard');
+    const comp = (dl.cards || []).filter(c => c.component === 'companion');
+    const mainCount = main.reduce((s, c) => s + c.qty, 0);
+    const sideCount = side.reduce((s, c) => s + c.qty, 0);
+
+    html += `<div class="dl-card">`;
+    html += `<div class="dl-card-header">`;
+    html += `<div><span class="player-name">${{esc(name)}}</span></div>`;
+    html += `<div style="display:flex;gap:6px;align-items:center">`;
+    html += `<span class="deck-label">${{esc(dl.name)}}</span>`;
+    if (ps.t) html += `<span class="wr-pill wr-badge ${{wrC}}">${{wr}}% (${{ps.w || 0}}-${{ps.l || 0}}-${{ps.d || 0}})</span>`;
+    html += `</div></div>`;
+
+    html += `<div class="dl-card-body">`;
+
+    if (comp.length) {{
+      html += '<div class="dl-section-title">Companion</div>';
+      comp.forEach(c => {{ html += `<div class="dl-card-entry"><span class="qty">${{c.qty}}</span><span class="cname">${{esc(c.name)}}</span></div>`; }});
+    }}
+
+    if (main.length) {{
+      // Group by card type
+      const byType = {{}};
+      main.forEach(c => {{ if (!byType[c.type]) byType[c.type] = []; byType[c.type].push(c); }});
+      const typeOrder = ['Creature', 'Instant', 'Sorcery', 'Enchantment', 'Artifact', 'Planeswalker', 'Land'];
+      const sortedTypes = Object.keys(byType).sort((a, b) => {{
+        const ai = typeOrder.indexOf(a), bi = typeOrder.indexOf(b);
+        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+      }});
+      html += `<div class="dl-section-title">Main Deck (${{mainCount}})</div>`;
+      sortedTypes.forEach(type => {{
+        const count = byType[type].reduce((s, c) => s + c.qty, 0);
+        html += `<div style="color:var(--text-3);font-size:.7rem;margin-top:6px;text-transform:uppercase;letter-spacing:.04em">${{type}} (${{count}})</div>`;
+        byType[type].sort((a, b) => b.qty - a.qty || a.name.localeCompare(b.name));
+        byType[type].forEach(c => {{ html += `<div class="dl-card-entry"><span class="qty">${{c.qty}}</span><span class="cname">${{esc(c.name)}}</span></div>`; }});
+      }});
+    }}
+
+    if (side.length) {{
+      html += `<div class="dl-section-title">Sideboard (${{sideCount}})</div>`;
+      side.sort((a, b) => b.qty - a.qty || a.name.localeCompare(b.name));
+      side.forEach(c => {{ html += `<div class="dl-card-entry"><span class="qty">${{c.qty}}</span><span class="cname">${{esc(c.name)}}</span></div>`; }});
+    }}
+
+    html += `</div></div>`;
+  }});
+
+  html += '</div>';
+  container.innerHTML = html;
+}}
+
+document.getElementById('dl-search').addEventListener('input', renderDecklists);
+document.getElementById('dl-deck-filter').addEventListener('change', renderDecklists);
+
+/* ══════════════════════════════════════════════════
+   ITERATIONS PANEL
+   ══════════════════════════════════════════════════ */
+function renderIterations() {{
+  const search = document.getElementById('iter-search').value.toLowerCase();
+  const container = document.getElementById('iter-container');
+
+  if (DECK_ITERATIONS.length === 0) {{
+    container.innerHTML = '<div style="text-align:center;padding:3rem;color:var(--text-3)"><div style="font-size:2rem;margin-bottom:.5rem">🔍</div><div>No se encontraron iteraciones de deck (≥80% cartas compartidas).<br>Se necesitan decklists descargadas y al menos 2 versiones distintas del mismo arquetipo.</div></div>';
+    return;
+  }}
+
+  let filtered = DECK_ITERATIONS;
+  if (search) {{
+    filtered = filtered.filter(g => g.archetype.toLowerCase().includes(search));
+  }}
+
+  if (filtered.length === 0) {{
+    container.innerHTML = '<div style="color:var(--text-3);text-align:center;padding:2rem">No hay iteraciones que coincidan con el filtro.</div>';
+    return;
+  }}
+
+  let html = '';
+  filtered.forEach((grp, gi) => {{
+    const wrDiff = grp.best_wr - grp.worst_wr;
+    html += `<div class="iter-group">`;
+    html += `<div class="iter-group-header" onclick="this.nextElementSibling.classList.toggle('open')">`;
+    html += `<h3>${{esc(grp.archetype)}}</h3>`;
+    html += `<span class="iter-badge count">${{grp.total}} listas / ${{grp.unique}} únicas</span>`;
+    html += `<span class="iter-badge best">Mejor: ${{grp.best_wr}}%</span>`;
+    html += `<span class="iter-badge worst">Peor: ${{grp.worst_wr}}%</span>`;
+    if (wrDiff > 0) html += `<span style="color:var(--text-2);font-size:.78rem">Δ${{wrDiff.toFixed(1)}}%</span>`;
+    html += `</div>`;
+
+    html += `<div class="iter-body${{gi === 0 ? ' open' : ''}}">`;
+
+    // Shared core section
+    if (grp.shared_core && grp.shared_core.length > 0) {{
+      html += `<div class="iter-shared">`;
+      html += `<div class="iter-shared-title">🔗 Núcleo compartido (${{grp.shared_core.reduce((s, c) => s + c.qty, 0)}} cartas en todas las versiones)</div>`;
+      html += `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px">`;
+      grp.shared_core.forEach(c => {{
+        html += `<span style="background:var(--bg-2);padding:2px 8px;border-radius:4px;font-size:.72rem;color:var(--text-1)">${{c.qty}}x ${{esc(c.name)}}</span>`;
+      }});
+      html += `</div></div>`;
+    }}
+
+    html += `<div class="iter-list-grid">`;
+    grp.iterations.forEach(it => {{
+      const cls = it.is_best ? 'is-best' : it.is_worst ? 'is-worst' : '';
+      const wrC = wrColor(it.wr);
+      html += `<div class="iter-card ${{cls}}">`;
+      if (it.is_best) html += `<span class="iter-label best">🏆 Mejor</span>`;
+      if (it.is_worst) html += `<span class="iter-label worst">⬇ Peor</span>`;
+      html += `<div class="iter-player">${{esc(it.player)}}</div>`;
+      html += `<div style="color:var(--text-2);font-size:.78rem;margin-bottom:4px">${{esc(it.deck_name)}}</div>`;
+      html += `<div class="iter-stats">`;
+      html += `<span>WR: <span class="wr-val" style="color:${{wrC}}">${{it.wr}}%</span></span>`;
+      html += `<span style="color:var(--green)">${{it.w}}W</span>`;
+      html += `<span style="color:var(--red)">${{it.l}}L</span>`;
+      html += `<span style="color:var(--yellow)">${{it.d}}D</span>`;
+      html += `<span style="color:var(--text-3)">${{it.t}} matches</span>`;
+      html += `</div>`;
+
+      // Show card list grouped by type
+      const main = (it.cards || []).filter(c => c.component === 'main');
+      const side = (it.cards || []).filter(c => c.component === 'sideboard');
+      if (main.length) {{
+        html += `<div style="margin-top:.5rem;max-height:200px;overflow-y:auto">`;
+        html += `<div style="color:var(--yellow);font-size:.7rem;font-weight:600;margin-bottom:2px">MAIN (${{main.reduce((s,c) => s+c.qty, 0)}})</div>`;
+        main.sort((a, b) => b.qty - a.qty || a.name.localeCompare(b.name));
+        main.forEach(c => {{ html += `<div class="dl-card-entry"><span class="qty">${{c.qty}}</span><span class="cname">${{esc(c.name)}}</span></div>`; }});
+        if (side.length) {{
+          html += `<div style="color:var(--yellow);font-size:.7rem;font-weight:600;margin:6px 0 2px">SIDE (${{side.reduce((s,c) => s+c.qty, 0)}})</div>`;
+          side.forEach(c => {{ html += `<div class="dl-card-entry"><span class="qty">${{c.qty}}</span><span class="cname">${{esc(c.name)}}</span></div>`; }});
+        }}
+        html += `</div>`;
+      }}
+
+      // Diff from best (if not best itself)
+      if (!it.is_best && it.diff && it.diff.length > 0) {{
+        html += `<div class="iter-diff">`;
+        html += `<div class="iter-diff-title">Diferencias vs Mejor versión</div>`;
+        it.diff.sort((a, b) => b.qty_diff - a.qty_diff);
+        it.diff.forEach(d => {{
+          const cls2 = d.qty_diff > 0 ? 'added' : 'removed';
+          const sign = d.qty_diff > 0 ? '+' : '';
+          html += `<div class="iter-diff-entry ${{cls2}}">${{sign}}${{d.qty_diff}} ${{esc(d.card)}}</div>`;
+        }});
+        html += `</div>`;
+      }}
+
+      html += `</div>`;
+    }});
+    html += `</div>`; // iter-list-grid
+    html += `</div>`; // iter-body
+    html += `</div>`; // iter-group
+  }});
+
+  container.innerHTML = html;
+}}
+
+document.getElementById('iter-search').addEventListener('input', renderIterations);
+
+/* ══════════════════════════════════════════════════
    KEYBOARD SHORTCUTS
    ══════════════════════════════════════════════════ */
 document.addEventListener('keydown', e => {{
@@ -1153,6 +1738,8 @@ document.addEventListener('keydown', e => {{
   if (e.key === '1' && currentTournamentId) switchPanel('meta-panel');
   if (e.key === '2' && currentTournamentId) switchPanel('matrix-panel');
   if (e.key === '3' && currentTournamentId) switchPanel('detail-panel');
+  if (e.key === '4' && currentTournamentId) switchPanel('decklists-panel');
+  if (e.key === '5' && currentTournamentId) switchPanel('iterations-panel');
 }});
 
 /* ══════════════════════════════════════════════════

@@ -63,6 +63,8 @@ class MatchResult:
     result_string: str
     player1_decklist: Optional[str] = None
     player2_decklist: Optional[str] = None
+    player1_decklist_id: Optional[str] = None
+    player2_decklist_id: Optional[str] = None
     format_name: Optional[str] = None
 
 
@@ -245,10 +247,14 @@ def parse_match(match_json: dict, round_number: int, round_id: int) -> MatchResu
     # Decklists
     p1_deck = None
     p2_deck = None
+    p1_deck_id = None
+    p2_deck_id = None
     if competitors and competitors[0].get("Decklists"):
         p1_deck = competitors[0]["Decklists"][0].get("DecklistName")
+        p1_deck_id = competitors[0]["Decklists"][0].get("DecklistId")
     if len(competitors) > 1 and competitors[1].get("Decklists"):
         p2_deck = competitors[1]["Decklists"][0].get("DecklistName")
+        p2_deck_id = competitors[1]["Decklists"][0].get("DecklistId")
 
     return MatchResult(
         round_number=round_number,
@@ -263,6 +269,8 @@ def parse_match(match_json: dict, round_number: int, round_id: int) -> MatchResu
         result_string=match_json.get("ResultString", ""),
         player1_decklist=p1_deck,
         player2_decklist=p2_deck,
+        player1_decklist_id=p1_deck_id,
+        player2_decklist_id=p2_deck_id,
         format_name=match_json.get("Format"),
     )
 
@@ -370,9 +378,11 @@ def build_matchup_matrix(tournament: TournamentData) -> dict:
             "player1": match.player1.display_name,
             "player1_deck": d1,
             "player1_wins": match.player1_wins,
+            "player1_decklist_id": match.player1_decklist_id,
             "player2": match.player2.display_name,
             "player2_deck": d2,
             "player2_wins": match.player2_wins,
+            "player2_decklist_id": match.player2_decklist_id,
             "draws": match.draws,
             "winner": winner,
             "result": match.result_string,
