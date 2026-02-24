@@ -780,6 +780,7 @@ function renderMetaTable() {{
   document.getElementById('pie-total').textContent = filtered.length;
 
   // Update header sort indicators
+  document.querySelectorAll('#meta-tbl thead th[data-key]').forEach(th => {{
     th.classList.remove('sorted-asc', 'sorted-desc');
     if (th.dataset.key === metaSortKey) {{
       th.classList.add(metaSortDir > 0 ? 'sorted-asc' : 'sorted-desc');
@@ -1171,7 +1172,7 @@ document.getElementById('btn-do-add').addEventListener('click', async () => {{
   if (!url) {{ showStatus('⚠️ Pega una URL de melee.gg', 'error'); return; }}
 
   // Validate URL format
-  if (!url.match(/melee\.gg/i) && !url.match(/^\d+$/)) {{
+  if (!url.match(/melee[.]gg/i) && !url.match(/^\d+$/)) {{
     showStatus('⚠️ Introduce una URL válida de melee.gg o un ID numérico de torneo.', 'error');
     return;
   }}
